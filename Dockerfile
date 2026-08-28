@@ -12,8 +12,11 @@ WORKDIR /app
 COPY --from=build /out/fuelboard ./bin/fuelboard
 COPY migrations ./migrations
 COPY scripts ./scripts
+RUN chmod +x ./scripts/*.sh
 
-# Default command runs the 15-min collect+publish cycle; override to
-# ./scripts/daily_fuel_report.sh for the once-a-day MPG pull, or to
-# ./bin/fuelboard <subcommand> to run a single step directly (e.g. `migrate`).
+# entrypoint.sh applies pending migrations, then execs CMD. Default CMD runs
+# the 15-min collect+publish cycle; override to ./scripts/daily_fuel_report.sh
+# for the once-a-day MPG pull, or to ./bin/fuelboard <subcommand> to run a
+# single step directly.
+ENTRYPOINT ["./scripts/entrypoint.sh"]
 CMD ["./scripts/frequent_cycle.sh"]
