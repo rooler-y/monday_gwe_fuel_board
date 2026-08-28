@@ -1,38 +1,42 @@
-#!/usr/bin/env bash
-# Runs every 15 minutes via cron: refresh from the target DB and Samsara,
-# then publish the current snapshot to the Monday Fuel Board.
+#!/bin/sh
+# Runs the collect+publish cycle in order: refresh from the target DB and
+# Samsara, then publish the current snapshot to the Monday Fuel Board.
+# Meant to run every 15 minutes, from either host cron or a container
+# scheduler (Railway cron, etc.) — path-portable (derives its own directory)
+# and POSIX sh, no bashisms.
 #
 # Best-effort, not fail-fast: each step's failure is logged but does not
 # block the next step, since every collector's upserts are independent and
 # publish-monday should still push whatever DID update this cycle even if
 # one earlier step failed.
 #
-# flock guards against overlapping runs if a cycle takes longer than 15
-# minutes (API slowness etc.) — a second invocation just exits immediately
-# instead of racing the first.
+# Logs to stdout/stderr only (12-factor style) — the caller decides where
+# that goes: the host crontab redirects it to logs/cron.log, a container
+# platform captures it as the container's own log stream.
+#
+# flock guards against overlapping runs if a cycle takes longer than its
+# schedule interval — a second invocation just exits immediately instead of
+# racing the first.
 
 set -u
 
-DIR="/home/yoqubboy_y/Desktop/monday_gwe_fuel_board"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BIN="$DIR/bin/fuelboard"
-LOG="$DIR/logs/fuelboard.log"
-LOCK="$DIR/logs/frequent_cycle.lock"
+LOCK="/tmp/fuelboard-frequent-cycle.lock"
 
 exec 200>"$LOCK"
 flock -n 200 || exit 0
 
 cd "$DIR" || exit 1
 
-log() {
-	printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >>"$LOG"
-}
+ts() { date -u +%FT%TZ; }
 
 run() {
-	log "start: $1"
-	if "$BIN" "$1" >>"$LOG" 2>&1; then
-		log "ok: $1"
+	echo "$(ts) start: $1"
+	if "$BIN" "$1"; then
+		echo "$(ts) ok: $1"
 	else
-		log "FAILED: $1 (exit $?)"
+		echo "$(ts) FAILED: $1 (exit $?)" >&2
 	fi
 }
 
