@@ -1,0 +1,5 @@
+.env
+# keep service-account/credential JSON out of git
+*.json
+/bin/
+/logs/
