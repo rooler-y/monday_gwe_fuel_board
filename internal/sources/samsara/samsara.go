@@ -95,10 +95,16 @@ func (c *Client) GetVehicleFuelPercents(ctx context.Context, vehicleIDs []string
 
 		var resp struct {
 			Data []struct {
-				ID           string `json:"id"`
-				FuelPercents *struct {
+				ID string `json:"id"`
+				// The request param is "fuelPercents" (plural) but the
+				// response field is "fuelPercent" (singular) — confirmed
+				// against the real API, not assumed; getting this wrong
+				// silently leaves the value nil with no error, which is
+				// exactly what happened before this was caught (0 out of
+				// 306 vehicles ever "had" a reading).
+				FuelPercent *struct {
 					Value float64 `json:"value"`
-				} `json:"fuelPercents"`
+				} `json:"fuelPercent"`
 			} `json:"data"`
 		}
 
@@ -111,8 +117,8 @@ func (c *Client) GetVehicleFuelPercents(ctx context.Context, vehicleIDs []string
 		}
 
 		for _, v := range resp.Data {
-			if v.FuelPercents != nil {
-				result[v.ID] = v.FuelPercents.Value
+			if v.FuelPercent != nil {
+				result[v.ID] = v.FuelPercent.Value
 			}
 		}
 	}
