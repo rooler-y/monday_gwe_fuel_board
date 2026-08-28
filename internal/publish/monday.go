@@ -30,19 +30,21 @@ const (
 	// Note, Truck Stop, Address, Route, Exit, Refuel Amount, Map Link,
 	// Driver Message) is a dispatcher-owned manual workflow and must never
 	// be touched here.
-	colMC        = "text_mm6nfsgn"
-	colUnit      = "board_relation_mm6nz81f"
-	colDriver    = "text_mm6nfz8b"
-	colPhone     = "text_mm6n3g56"
-	colLoadID    = "text_mm6nnzap"
-	colFuelLevel = "numeric_mm6nqb3z"
-	colFuelMPG   = "numeric_mm6npm9x"
+	colMC                = "text_mm6nfsgn"
+	colUnit              = "board_relation_mm6nz81f"
+	colDriver            = "text_mm6nfz8b"
+	colPhone             = "text_mm6n3g56"
+	colLoadID            = "text_mm6nnzap"
+	colFuelLevel         = "numeric_mm6nqb3z"
+	colFuelMPG           = "numeric_mm6npm9x"
+	colOriginDestination = "text_mm6n6cwx"
 )
 
 // PublishFuelBoard creates a Fuel Board item for every unit that doesn't
 // have one yet (item name = unit number, linked to its matching IN/OUT board
-// item if found), and updates MC/Driver/Phone/Load ID/Fuel Level/MPG on every
-// unit's existing item. Everything else on the board is left untouched.
+// item if found), and updates MC/Driver/Phone/Load ID/Fuel Level/MPG/
+// Origin-Destination on every unit's existing item. Everything else on the
+// board is left untouched.
 func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Client, fuelBoardID string) (created, updated int, err error) {
 	units, err := db.ListUnits(ctx, pool)
 	if err != nil {
@@ -135,6 +137,9 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 			}
 			if driver.LoadNumber != nil {
 				cv[colLoadID] = *driver.LoadNumber
+			}
+			if driver.Destination != nil {
+				cv[colOriginDestination] = *driver.Destination
 			}
 		}
 

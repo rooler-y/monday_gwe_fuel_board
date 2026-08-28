@@ -9,9 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Row is one truck (unit) in scope, left-joined with whoever is currently
-// assigned to it and what they're doing. Driver/load/destination fields are
-// nil when the truck currently has no active driver assigned.
+// Row is one truck (unit) in scope, joined to its currently assigned
+// actively-employed driver — trucks with no such driver are excluded
+// entirely (see the INNER JOIN in FetchUnitsAndDrivers), so DriverFirstName/
+// DriverLastName/DriverPhone are effectively always present here. Load/
+// destination stay nullable since a driver might not have a current load.
 //
 // Deliberately does NOT include trucks.provider_vehicle_id: it turned out
 // not to be unique in this DB (confirmed live — e.g. two different
@@ -28,7 +30,7 @@ type Row struct {
 	DriverPhone     *string
 
 	LoadNumber  *string
-	Destination *string
+	Destination *string // "city, state zip", not a full street address
 }
 
 func FetchCompanyName(ctx context.Context, pool *pgxpool.Pool, companyID int64) (string, error) {
@@ -38,10 +40,12 @@ func FetchCompanyName(ctx context.Context, pool *pgxpool.Pool, companyID int64) 
 }
 
 // FetchUnitsAndDrivers returns one row per non-deleted truck belonging to
-// companyID, with its currently assigned active driver (if any), that
-// driver's current load number, and the load's current waypoint location
-// (Load.current_waypoint_id is the dispatch system's own "where this load is
-// headed right now" pointer).
+// companyID that currently has an actively-employed driver assigned
+// (trucks with no such driver are excluded entirely — not returned as an
+// empty-driver row), with that driver's current load number and the load's
+// current waypoint location as "city, state zip" (Load.current_waypoint_id
+// is the dispatch system's own "where this load is headed right now"
+// pointer).
 func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int64) ([]Row, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT
@@ -50,12 +54,12 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 			u.last_name,
 			u.phone,
 			l.load_number,
-			COALESCE(p.name, NULLIF(concat_ws(', ', p.city, p.state), '')) AS destination
+			NULLIF(concat_ws(' ', concat_ws(', ', p.city, p.state), p.postal_code), '') AS destination
 		FROM trucks t
-		LEFT JOIN drivers d ON d.current_truck_id = t.id
+		JOIN drivers d ON d.current_truck_id = t.id
 			AND d.is_deleted = false
 			AND d.employment_status = 'active'
-		LEFT JOIN users u ON u.id = d.user_id AND u.is_deleted = false
+		JOIN users u ON u.id = d.user_id AND u.is_deleted = false
 		LEFT JOIN loads l ON l.id = d.current_load_id AND l.is_deleted = false
 		LEFT JOIN waypoints w ON w.id = l.current_waypoint_id AND w.is_deleted = false
 		LEFT JOIN places p ON p.id = w.place_id AND p.is_deleted = false
