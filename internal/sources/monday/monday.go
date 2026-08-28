@@ -7,12 +7,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const apiURL = "https://api.monday.com/v2"
+
+// requestTimeout bounds every individual HTTP call. Without this, a stalled
+// request hangs forever — which is exactly what made an earlier 81-operation
+// batch fail as an opaque "Request timed out" with no indication of whether
+// monday's server had actually finished the work (it had).
+const requestTimeout = 30 * time.Second
 
 type Client struct {
 	apiToken   string
@@ -20,7 +28,7 @@ type Client struct {
 }
 
 func NewClient(apiToken string) *Client {
-	return &Client{apiToken: apiToken, httpClient: &http.Client{}}
+	return &Client{apiToken: apiToken, httpClient: &http.Client{Timeout: requestTimeout}}
 }
 
 type Item struct {
@@ -99,11 +107,52 @@ type UpdateOp struct {
 	ColumnValues ColumnValues
 }
 
-// BatchApply issues every create and update in ONE HTTP request, as a single
-// GraphQL mutation with one aliased field per operation (monday has no bulk
-// mutation that takes an array of items). Returns the new item ID for each
-// create, in the same order as creates.
+// maxOpsPerRequest bounds how many operations go in one GraphQL request. A
+// single 81-operation request to monday's API returned a server-side timeout
+// even though the work completed — chunking keeps each request's cost
+// predictable and shrinks the blast radius of any one request failing.
+const maxOpsPerRequest = 15
+
+// BatchApply issues every create and update as aliased mutations, chunked
+// into requests of at most maxOpsPerRequest operations each (monday has no
+// bulk mutation that takes an array of items, so each chunk is its own
+// GraphQL mutation with one aliased field per operation). Creates and
+// updates are chunked independently. Returns the new item ID for each
+// create, in the same order as creates — including for creates in a chunk
+// that came before a later chunk's failure, since every chunk still gets
+// attempted regardless of an earlier one's error.
 func (c *Client) BatchApply(ctx context.Context, creates []CreateOp, updates []UpdateOp) ([]string, error) {
+	createdIDs := make([]string, len(creates))
+	var errs []error
+
+	for start := 0; start < len(creates); start += maxOpsPerRequest {
+		end := start + maxOpsPerRequest
+		if end > len(creates) {
+			end = len(creates)
+		}
+		ids, err := c.batchOnce(ctx, creates[start:end], nil)
+		copy(createdIDs[start:end], ids)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("creates[%d:%d]: %w", start, end, err))
+		}
+	}
+
+	for start := 0; start < len(updates); start += maxOpsPerRequest {
+		end := start + maxOpsPerRequest
+		if end > len(updates) {
+			end = len(updates)
+		}
+		if _, err := c.batchOnce(ctx, nil, updates[start:end]); err != nil {
+			errs = append(errs, fmt.Errorf("updates[%d:%d]: %w", start, end, err))
+		}
+	}
+
+	return createdIDs, errors.Join(errs...)
+}
+
+// batchOnce issues one chunk (creates and/or updates) as a single HTTP
+// request/GraphQL mutation.
+func (c *Client) batchOnce(ctx context.Context, creates []CreateOp, updates []UpdateOp) ([]string, error) {
 	if len(creates) == 0 && len(updates) == 0 {
 		return nil, nil
 	}

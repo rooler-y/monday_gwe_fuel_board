@@ -52,14 +52,52 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 		return 0, 0, nil
 	}
 
-	var inOutItems []monday.Item
+	needsLookup := false
 	for _, u := range units {
 		if u.MondayItemID == nil {
-			inOutItems, err = client.ListItems(ctx, unitInOutBoardID)
-			if err != nil {
-				return 0, 0, fmt.Errorf("list IN/OUT board items: %w", err)
-			}
+			needsLookup = true
 			break
+		}
+	}
+
+	var inOutItems []monday.Item
+	if needsLookup {
+		inOutItems, err = client.ListItems(ctx, unitInOutBoardID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("list IN/OUT board items: %w", err)
+		}
+
+		// Reconcile against the Fuel Board's ACTUAL current items before
+		// deciding create-vs-update — a unit with no locally-known
+		// monday_item_id might already have an item on the board (e.g. a
+		// prior publish run created it but the response was lost to a
+		// timeout/crash before we could persist the id, as happened once
+		// already). Backfilling from the board's real state, rather than
+		// trusting our local cache alone, is what makes retrying after a
+		// failure safe instead of duplicate-creating.
+		fuelBoardItems, err := client.ListItems(ctx, fuelBoardID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("list fuel board items: %w", err)
+		}
+		fuelBoardItemIDByName := make(map[string]string, len(fuelBoardItems))
+		for _, it := range fuelBoardItems {
+			fuelBoardItemIDByName[it.Name] = it.ID
+		}
+		for i, u := range units {
+			if u.MondayItemID != nil {
+				continue
+			}
+			id, ok := fuelBoardItemIDByName[u.UnitNumber]
+			if !ok {
+				continue
+			}
+			if _, err := db.UpsertUnit(ctx, pool, db.UnitUpsert{
+				UnitNumber:   u.UnitNumber,
+				MondayItemID: &id,
+			}); err != nil {
+				return 0, 0, fmt.Errorf("backfill monday_item_id for unit %s: %w", u.UnitNumber, err)
+			}
+			units[i].MondayItemID = &id
 		}
 	}
 

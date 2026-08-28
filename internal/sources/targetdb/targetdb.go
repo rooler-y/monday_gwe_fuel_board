@@ -12,9 +12,16 @@ import (
 // Row is one truck (unit) in scope, left-joined with whoever is currently
 // assigned to it and what they're doing. Driver/load/destination fields are
 // nil when the truck currently has no active driver assigned.
+//
+// Deliberately does NOT include trucks.provider_vehicle_id: it turned out
+// not to be unique in this DB (confirmed live — e.g. two different
+// truck_numbers, including what looks like the same physical unit recorded
+// twice under two different truck_number spellings, sharing one
+// provider_vehicle_id), so it can't safely feed units.samsara_vehicle_id
+// (UNIQUE). samsara_vehicle_id is populated solely by the Samsara collector's
+// own live vehicle-name matching (internal/collect/samsara_match.go).
 type Row struct {
-	UnitNumber        string
-	ProviderVehicleID *string
+	UnitNumber string
 
 	DriverFirstName *string
 	DriverLastName  *string
@@ -39,7 +46,6 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 	rows, err := pool.Query(ctx, `
 		SELECT
 			t.truck_number,
-			t.provider_vehicle_id,
 			u.first_name,
 			u.last_name,
 			u.phone,
@@ -54,6 +60,7 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 		LEFT JOIN waypoints w ON w.id = l.current_waypoint_id AND w.is_deleted = false
 		LEFT JOIN places p ON p.id = w.place_id AND p.is_deleted = false
 		WHERE t.is_deleted = false AND t.company_id = $1
+		ORDER BY t.truck_number
 	`, companyID)
 	if err != nil {
 		return nil, err
@@ -63,7 +70,7 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 	var out []Row
 	for rows.Next() {
 		var r Row
-		if err := rows.Scan(&r.UnitNumber, &r.ProviderVehicleID, &r.DriverFirstName, &r.DriverLastName, &r.DriverPhone, &r.LoadNumber, &r.Destination); err != nil {
+		if err := rows.Scan(&r.UnitNumber, &r.DriverFirstName, &r.DriverLastName, &r.DriverPhone, &r.LoadNumber, &r.Destination); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
