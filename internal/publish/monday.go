@@ -38,13 +38,14 @@ const (
 	colFuelLevel         = "numeric_mm6nqb3z"
 	colFuelMPG           = "numeric_mm6npm9x"
 	colOriginDestination = "text_mm6n6cwx"
+	colDEFLevel          = "text_mm6pzqm2"
 )
 
 // PublishFuelBoard creates a Fuel Board item for every unit that doesn't
 // have one yet (item name = unit number, linked to its matching IN/OUT board
-// item if found), and updates MC/Driver/Phone/Load ID/Fuel Level/MPG/
-// Origin-Destination on every unit's existing item. Everything else on the
-// board is left untouched.
+// item if found), and updates MC/Driver/Phone/Load ID/Fuel Level/MPG/DEF
+// Level/Origin-Destination on every unit's existing item. Everything else on
+// the board is left untouched.
 func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Client, fuelBoardID string) (created, updated int, err error) {
 	units, err := db.ListUnits(ctx, pool)
 	if err != nil {
@@ -148,6 +149,12 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 		}
 		if u.MPG != nil {
 			cv[colFuelMPG] = formatNumber(*u.MPG)
+		}
+		if u.DEFLevelPercent != nil {
+			// colDEFLevel is a plain text column (not "numbers" like Fuel
+			// Level %/MPG), so it has no built-in "%" unit formatting —
+			// append it explicitly.
+			cv[colDEFLevel] = formatNumber(*u.DEFLevelPercent) + "%"
 		}
 
 		if u.MondayItemID == nil {

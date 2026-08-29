@@ -79,12 +79,21 @@ func (c *Client) ListVehicles(ctx context.Context) ([]Vehicle, error) {
 	return out, nil
 }
 
-// GetVehicleFuelPercents fetches the current live fuel level (percent) for
-// each of the given vehicle IDs, chunked per statsChunkSize. Vehicles with no
-// fuelPercents reading (e.g. no sensor, no recent data) are simply absent
-// from the returned map rather than zero.
-func (c *Client) GetVehicleFuelPercents(ctx context.Context, vehicleIDs []string) (map[string]float64, error) {
-	result := make(map[string]float64, len(vehicleIDs))
+// LiveLevels is one vehicle's live fuel/DEF reading from /fleet/vehicles/stats.
+// Either field may be nil if that vehicle has no current reading for it.
+type LiveLevels struct {
+	FuelPercent *float64
+	DEFPercent  *float64
+}
+
+// GetVehicleLiveLevels fetches the current live fuel level and DEF
+// (diesel exhaust fluid) level, both as percent, for each of the given
+// vehicle IDs — one combined request per chunk of statsChunkSize (confirmed
+// live that both stat types can be requested together). A vehicle with
+// neither reading (no sensor, no recent data) is simply absent from the
+// returned map.
+func (c *Client) GetVehicleLiveLevels(ctx context.Context, vehicleIDs []string) (map[string]LiveLevels, error) {
+	result := make(map[string]LiveLevels, len(vehicleIDs))
 
 	for i := 0; i < len(vehicleIDs); i += statsChunkSize {
 		end := i + statsChunkSize
@@ -105,20 +114,35 @@ func (c *Client) GetVehicleFuelPercents(ctx context.Context, vehicleIDs []string
 				FuelPercent *struct {
 					Value float64 `json:"value"`
 				} `json:"fuelPercent"`
+				// defLevelMilliPercent: request param and response field
+				// match exactly (confirmed live). Value is in milli-percent
+				// (e.g. 58800 == 58.8%) — divide by 1000.
+				DEFLevelMilliPercent *struct {
+					Value float64 `json:"value"`
+				} `json:"defLevelMilliPercent"`
 			} `json:"data"`
 		}
 
 		q := map[string]string{
 			"vehicleIds": strings.Join(chunk, ","),
-			"types":      "fuelPercents",
+			"types":      "fuelPercents,defLevelMilliPercent",
 		}
 		if err := c.get(ctx, "/fleet/vehicles/stats", q, &resp); err != nil {
 			return nil, err
 		}
 
 		for _, v := range resp.Data {
+			var lv LiveLevels
 			if v.FuelPercent != nil {
-				result[v.ID] = v.FuelPercent.Value
+				fp := v.FuelPercent.Value
+				lv.FuelPercent = &fp
+			}
+			if v.DEFLevelMilliPercent != nil {
+				dp := v.DEFLevelMilliPercent.Value / 1000
+				lv.DEFPercent = &dp
+			}
+			if lv.FuelPercent != nil || lv.DEFPercent != nil {
+				result[v.ID] = lv
 			}
 		}
 	}

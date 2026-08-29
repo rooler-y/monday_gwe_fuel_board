@@ -12,8 +12,8 @@ import (
 )
 
 // matchedUnits returns units that already have a samsara_vehicle_id (i.e.
-// have been through MatchSamsaraUnits) — both fuel pulls below only make
-// sense for units we've already linked.
+// have been through MatchSamsaraUnits) — every pull below only makes sense
+// for units we've already linked.
 func matchedUnits(ctx context.Context, pool *pgxpool.Pool) ([]db.Unit, error) {
 	units, err := db.ListUnits(ctx, pool)
 	if err != nil {
@@ -28,9 +28,10 @@ func matchedUnits(ctx context.Context, pool *pgxpool.Pool) ([]db.Unit, error) {
 	return out, nil
 }
 
-// PullSamsaraFuelLevels updates units.fuel_level_percent from Samsara's live
-// vehicle stats. Meant to run frequently (e.g. every 15 min via cron).
-func PullSamsaraFuelLevels(ctx context.Context, pool *pgxpool.Pool, client *samsara.Client) (updated int, err error) {
+// PullSamsaraLiveLevels updates units.fuel_level_percent and
+// units.def_level_percent from Samsara's live vehicle stats (one combined
+// request). Meant to run frequently (e.g. every 15 min via cron).
+func PullSamsaraLiveLevels(ctx context.Context, pool *pgxpool.Pool, client *samsara.Client) (updated int, err error) {
 	units, err := matchedUnits(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("list matched units: %w", err)
@@ -46,20 +47,20 @@ func PullSamsaraFuelLevels(ctx context.Context, pool *pgxpool.Pool, client *sams
 		unitByVehicleID[*u.SamsaraVehicleID] = u
 	}
 
-	fuelPercents, err := client.GetVehicleFuelPercents(ctx, vehicleIDs)
+	levels, err := client.GetVehicleLiveLevels(ctx, vehicleIDs)
 	if err != nil {
-		return 0, fmt.Errorf("get fuel percents: %w", err)
+		return 0, fmt.Errorf("get live levels: %w", err)
 	}
 
-	for vehicleID, pct := range fuelPercents {
+	for vehicleID, lv := range levels {
 		u, ok := unitByVehicleID[vehicleID]
 		if !ok {
 			continue
 		}
-		pct := pct
 		if _, err := db.UpsertUnit(ctx, pool, db.UnitUpsert{
 			UnitNumber:       u.UnitNumber,
-			FuelLevelPercent: &pct,
+			FuelLevelPercent: lv.FuelPercent,
+			DEFLevelPercent:  lv.DEFPercent,
 		}); err != nil {
 			return updated, fmt.Errorf("upsert unit %s: %w", u.UnitNumber, err)
 		}

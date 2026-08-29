@@ -117,7 +117,7 @@ func runCollectSamsaraStats(ctx context.Context, cfg *config.Config, ownPool *pg
 	}
 	client := samsara.NewClient(cfg.SamsaraAPIToken)
 
-	updated, err := collect.PullSamsaraFuelLevels(ctx, ownPool, client)
+	updated, err := collect.PullSamsaraLiveLevels(ctx, ownPool, client)
 	if err != nil {
 		return err
 	}
