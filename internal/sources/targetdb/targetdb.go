@@ -42,11 +42,13 @@ func FetchCompanyName(ctx context.Context, pool *pgxpool.Pool, companyID int64) 
 }
 
 // FetchUnitsAndDrivers returns one row per non-deleted truck belonging to
-// companyID that currently has an actively-employed driver assigned
-// (trucks with no such driver are excluded entirely — not returned as an
-// empty-driver row), with that driver's current load number and the load's
-// full waypoint sequence (every non-deleted waypoint, in stop order, as
-// "city, state" chained by " => ") — not just the current/next stop.
+// companyID that currently has an actively-employed driver on a "company"
+// contract (company_cpm or company_percentage — lease/owner-operator
+// drivers are excluded, per the user) assigned (trucks with no such driver
+// are excluded entirely — not returned as an empty-driver row), with that
+// driver's current load number and the load's full waypoint sequence
+// (every non-deleted waypoint, in stop order, as "city, state" chained by
+// " => ") — not just the current/next stop.
 func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int64) ([]Row, error) {
 	rows, err := pool.Query(ctx, `
 		WITH load_route AS (
@@ -72,6 +74,7 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 		JOIN drivers d ON d.current_truck_id = t.id
 			AND d.is_deleted = false
 			AND d.employment_status = 'active'
+			AND d.driver_contract_type IN ('company_cpm', 'company_percentage')
 		JOIN users u ON u.id = d.user_id AND u.is_deleted = false
 		LEFT JOIN loads l ON l.id = d.current_load_id AND l.is_deleted = false
 		LEFT JOIN load_route lr ON lr.load_id = l.id
