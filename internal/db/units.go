@@ -56,6 +56,17 @@ func GetUnitBySamsaraVehicleID(ctx context.Context, pool *pgxpool.Pool, samsaraV
 	return scanUnit(row)
 }
 
+// ClearUnitMondayItemID unsets monday_item_id for a unit — used when the
+// item it pointed to is no longer active on the board (archived/deleted),
+// so the next publish run creates a fresh item instead of repeatedly
+// failing to update a dead reference. UpsertUnit can't do this: its
+// COALESCE-based partial-update semantics mean passing a nil MondayItemID
+// there always means "leave unchanged," never "clear."
+func ClearUnitMondayItemID(ctx context.Context, pool *pgxpool.Pool, unitNumber string) error {
+	_, err := pool.Exec(ctx, `UPDATE units SET monday_item_id = NULL, updated_at = now() WHERE unit_number = $1`, unitNumber)
+	return err
+}
+
 func ListUnits(ctx context.Context, pool *pgxpool.Pool) ([]Unit, error) {
 	rows, err := pool.Query(ctx, `SELECT `+unitColumns+` FROM units ORDER BY unit_number`)
 	if err != nil {

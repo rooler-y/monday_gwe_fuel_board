@@ -89,6 +89,49 @@ func (c *Client) ListItems(ctx context.Context, boardID string) ([]Item, error) 
 	return out, nil
 }
 
+// itemsChunkSize bounds how many item ids go in one items(ids: [...]) query.
+const itemsChunkSize = 100
+
+// GetItemStates returns the current state ("active", "archived", or
+// "deleted") for each of the given item ids, chunked. An id absent from the
+// returned map means monday has no record of it at all (fully purged).
+// Unlike items_page (which only ever returns active items, even when the
+// board is queried with state: all — confirmed live), this root-level
+// items() query returns an item's real state regardless of whether it's
+// still active, which is what makes it useful for detecting stale
+// monday_item_id references after an update fails.
+func (c *Client) GetItemStates(ctx context.Context, itemIDs []string) (map[string]string, error) {
+	const query = `
+		query ($ids: [ID!]) {
+			items(ids: $ids) { id state }
+		}
+	`
+
+	out := make(map[string]string, len(itemIDs))
+	for i := 0; i < len(itemIDs); i += itemsChunkSize {
+		end := i + itemsChunkSize
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		chunk := itemIDs[i:end]
+
+		var resp struct {
+			Items []struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			} `json:"items"`
+		}
+		if err := c.execute(ctx, query, map[string]any{"ids": chunk}, &resp); err != nil {
+			return nil, err
+		}
+		for _, it := range resp.Items {
+			out[it.ID] = it.State
+		}
+	}
+
+	return out, nil
+}
+
 // GetTextColumns reads the given text-type columns for every item on a
 // board, paginated. Returns item id -> (column id -> text). A column with
 // no value for an item is simply absent from that item's inner map. This is

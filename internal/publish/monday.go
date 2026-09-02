@@ -136,6 +136,7 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 	var creates []monday.CreateOp
 	var createdForUnit []db.Unit // parallel to creates, so results map back
 	var updates []monday.UpdateOp
+	var updatedForUnit []db.Unit // parallel to updates, for stale-item detection below
 
 	for _, u := range units {
 		cv := monday.ColumnValues{}
@@ -207,6 +208,7 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 				ItemID:       *u.MondayItemID,
 				ColumnValues: cv,
 			})
+			updatedForUnit = append(updatedForUnit, u)
 		}
 	}
 
@@ -228,10 +230,52 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 	}
 
 	if batchErr != nil {
+		// A common cause of update failures is a stale monday_item_id: the
+		// item was archived/deleted on the board after we created it, and
+		// monday rejects column-value changes on inactive items ("Cannot
+		// change column value for inactive items"). Detect and clear any
+		// such stale references so the NEXT run creates a fresh item
+		// instead of failing on the same dead reference forever. This
+		// doesn't fix the current run's error — it's still returned below —
+		// but stops it from recurring indefinitely.
+		if healErr := healStaleUpdates(ctx, pool, client, updatedForUnit); healErr != nil {
+			return 0, 0, fmt.Errorf("batch apply: %w (additionally failed to heal stale references: %v)", batchErr, healErr)
+		}
 		return 0, 0, fmt.Errorf("batch apply: %w", batchErr)
 	}
 
 	return len(creates), len(updates), nil
+}
+
+// healStaleUpdates checks the real current state of every item we just
+// tried to update and clears monday_item_id locally for any that came back
+// non-active (archived/deleted) or missing entirely (fully purged) — see
+// the call site for why.
+func healStaleUpdates(ctx context.Context, pool *pgxpool.Pool, client *monday.Client, updatedForUnit []db.Unit) error {
+	if len(updatedForUnit) == 0 {
+		return nil
+	}
+
+	itemIDs := make([]string, len(updatedForUnit))
+	for i, u := range updatedForUnit {
+		itemIDs[i] = *u.MondayItemID
+	}
+
+	states, err := client.GetItemStates(ctx, itemIDs)
+	if err != nil {
+		return fmt.Errorf("get item states: %w", err)
+	}
+
+	var errs []error
+	for _, u := range updatedForUnit {
+		if states[*u.MondayItemID] == "active" {
+			continue
+		}
+		if err := db.ClearUnitMondayItemID(ctx, pool, u.UnitNumber); err != nil {
+			errs = append(errs, fmt.Errorf("clear stale monday_item_id for unit %s: %w", u.UnitNumber, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func companyName(ctx context.Context, pool *pgxpool.Pool, cache map[int64]string, id int64) (string, error) {
