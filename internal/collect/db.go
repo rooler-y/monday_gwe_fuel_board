@@ -68,7 +68,7 @@ func upsertRow(ctx context.Context, ownPool *pgxpool.Pool, companyID int64, r ta
 		CompanyID:   &companyID,
 		UnitID:      &unit.ID,
 		LoadNumber:  r.LoadNumber,
-		Destination: r.Destination,
+		Destination: r.Route,
 	}
 
 	existing, err := db.GetDriverByName(ctx, ownPool, driverName)

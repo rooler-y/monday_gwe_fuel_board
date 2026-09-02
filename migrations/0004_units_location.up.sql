@@ -1,0 +1,2 @@
+ALTER TABLE units ADD COLUMN latitude NUMERIC(9,6);
+ALTER TABLE units ADD COLUMN longitude NUMERIC(9,6);

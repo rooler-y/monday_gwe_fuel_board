@@ -79,19 +79,22 @@ func (c *Client) ListVehicles(ctx context.Context) ([]Vehicle, error) {
 	return out, nil
 }
 
-// LiveLevels is one vehicle's live fuel/DEF reading from /fleet/vehicles/stats.
-// Either field may be nil if that vehicle has no current reading for it.
+// LiveLevels is one vehicle's live fuel/DEF/GPS reading from
+// /fleet/vehicles/stats. Any field may be nil if that vehicle has no
+// current reading for it.
 type LiveLevels struct {
 	FuelPercent *float64
 	DEFPercent  *float64
+	Latitude    *float64
+	Longitude   *float64
 }
 
-// GetVehicleLiveLevels fetches the current live fuel level and DEF
-// (diesel exhaust fluid) level, both as percent, for each of the given
-// vehicle IDs — one combined request per chunk of statsChunkSize (confirmed
-// live that both stat types can be requested together). A vehicle with
-// neither reading (no sensor, no recent data) is simply absent from the
-// returned map.
+// GetVehicleLiveLevels fetches the current live fuel level, DEF (diesel
+// exhaust fluid) level (both as percent), and GPS position for each of the
+// given vehicle IDs — one combined request per chunk of statsChunkSize
+// (confirmed live that fuelPercents/defLevelMilliPercent/gps can all be
+// requested together). A vehicle with none of these readings (no sensor, no
+// recent data) is simply absent from the returned map.
 func (c *Client) GetVehicleLiveLevels(ctx context.Context, vehicleIDs []string) (map[string]LiveLevels, error) {
 	result := make(map[string]LiveLevels, len(vehicleIDs))
 
@@ -120,12 +123,16 @@ func (c *Client) GetVehicleLiveLevels(ctx context.Context, vehicleIDs []string) 
 				DEFLevelMilliPercent *struct {
 					Value float64 `json:"value"`
 				} `json:"defLevelMilliPercent"`
+				GPS *struct {
+					Latitude  float64 `json:"latitude"`
+					Longitude float64 `json:"longitude"`
+				} `json:"gps"`
 			} `json:"data"`
 		}
 
 		q := map[string]string{
 			"vehicleIds": strings.Join(chunk, ","),
-			"types":      "fuelPercents,defLevelMilliPercent",
+			"types":      "fuelPercents,defLevelMilliPercent,gps",
 		}
 		if err := c.get(ctx, "/fleet/vehicles/stats", q, &resp); err != nil {
 			return nil, err
@@ -141,7 +148,12 @@ func (c *Client) GetVehicleLiveLevels(ctx context.Context, vehicleIDs []string) 
 				dp := v.DEFLevelMilliPercent.Value / 1000
 				lv.DEFPercent = &dp
 			}
-			if lv.FuelPercent != nil || lv.DEFPercent != nil {
+			if v.GPS != nil {
+				lat, lng := v.GPS.Latitude, v.GPS.Longitude
+				lv.Latitude = &lat
+				lv.Longitude = &lng
+			}
+			if lv.FuelPercent != nil || lv.DEFPercent != nil || lv.Latitude != nil {
 				result[v.ID] = lv
 			}
 		}

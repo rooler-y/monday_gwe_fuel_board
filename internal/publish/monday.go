@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -25,11 +26,14 @@ const (
 	// vehicles.
 	unitInOutBoardID = "18392501548"
 
-	// Fuel Board column IDs. Only these are ever written — every other
-	// column on that board (Status, Fuel Card, Card PIN, Next Station,
-	// Note, Truck Stop, Address, Route, Exit, Refuel Amount, Map Link,
-	// Driver Message) is a dispatcher-owned manual workflow and must never
-	// be touched here.
+	// Fuel Board column IDs actually written by this publisher. Everything
+	// else on that board (Status, Fuel Card, Card PIN, Next Station, Note,
+	// Truck Stop, Address, Route, Exit, Refuel Amount, Driver Message) is a
+	// dispatcher-owned manual workflow and must never be touched here.
+	// colMapLink is the one exception to "we only write our own fields" —
+	// it's confirmed repurposed: we compute it from live truck position +
+	// whatever the dispatcher put in Truck Stop/Address, replacing what was
+	// previously a fully manual link.
 	colMC                = "text_mm6nfsgn"
 	colUnit              = "board_relation_mm6nz81f"
 	colDriver            = "text_mm6nfz8b"
@@ -39,13 +43,18 @@ const (
 	colFuelMPG           = "numeric_mm6npm9x"
 	colOriginDestination = "text_mm6n6cwx"
 	colDEFLevel          = "text_mm6pzqm2"
+	colTruckStop         = "text_mm6n2qfs"
+	colAddress           = "text_mm6njh6g"
+	colMapLink           = "link_mm6n53pv"
 )
 
 // PublishFuelBoard creates a Fuel Board item for every unit that doesn't
 // have one yet (item name = unit number, linked to its matching IN/OUT board
 // item if found), and updates MC/Driver/Phone/Load ID/Fuel Level/MPG/DEF
-// Level/Origin-Destination on every unit's existing item. Everything else on
-// the board is left untouched.
+// Level/Origin-Destination/Map Link on every unit's existing item. Map Link
+// is only set when a fuel stop (Truck Stop or Address) has been entered and
+// we have a current GPS fix for the unit — see buildMapLink. Everything else
+// on the board is left untouched.
 func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Client, fuelBoardID string) (created, updated int, err error) {
 	units, err := db.ListUnits(ctx, pool)
 	if err != nil {
@@ -104,6 +113,24 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 		}
 	}
 
+	// Fuel-stop text (Truck Stop/Address) is only relevant for units that
+	// already have an item AND a current GPS fix — those are exactly the
+	// units that could get a Map Link this run.
+	needsFuelStopLookup := false
+	for _, u := range units {
+		if u.MondayItemID != nil && u.Latitude != nil && u.Longitude != nil {
+			needsFuelStopLookup = true
+			break
+		}
+	}
+	var fuelStops map[string]map[string]string
+	if needsFuelStopLookup {
+		fuelStops, err = client.GetTextColumns(ctx, fuelBoardID, []string{colTruckStop, colAddress})
+		if err != nil {
+			return 0, 0, fmt.Errorf("get fuel stop columns: %w", err)
+		}
+	}
+
 	companyNames := map[int64]string{}
 
 	var creates []monday.CreateOp
@@ -155,6 +182,12 @@ func PublishFuelBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Cl
 			// Level %/MPG), so it has no built-in "%" unit formatting —
 			// append it explicitly.
 			cv[colDEFLevel] = formatNumber(*u.DEFLevelPercent) + "%"
+		}
+
+		if u.MondayItemID != nil && u.Latitude != nil && u.Longitude != nil {
+			if link := buildMapLink(*u.Latitude, *u.Longitude, fuelStops[*u.MondayItemID][colTruckStop], fuelStops[*u.MondayItemID][colAddress]); link != "" {
+				cv[colMapLink] = map[string]any{"url": link, "text": "Route"}
+			}
 		}
 
 		if u.MondayItemID == nil {
@@ -214,6 +247,21 @@ func companyName(ctx context.Context, pool *pgxpool.Pool, cache map[int64]string
 	}
 	cache[id] = c.Name
 	return c.Name, nil
+}
+
+// buildMapLink returns a Google Maps directions URL from the unit's live
+// GPS position to the dispatcher-entered fuel stop, or "" if no fuel stop
+// has been entered yet. truckStop/address are passed straight through as
+// free text — Google Maps geocodes the destination itself when the link is
+// opened, so no geocoding step is needed on our side (confirmed: no
+// coordinates required for the destination param, just an address string).
+func buildMapLink(lat, lng float64, truckStop, address string) string {
+	dest := strings.TrimSpace(strings.TrimSpace(truckStop) + " " + strings.TrimSpace(address))
+	if dest == "" {
+		return ""
+	}
+	origin := fmt.Sprintf("%f,%f", lat, lng)
+	return "https://www.google.com/maps/dir/?api=1&origin=" + url.QueryEscape(origin) + "&destination=" + url.QueryEscape(dest)
 }
 
 // matchInOutItem finds the IN/OUT board item for unitNumber using the same

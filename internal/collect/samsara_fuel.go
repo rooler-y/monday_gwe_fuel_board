@@ -28,9 +28,10 @@ func matchedUnits(ctx context.Context, pool *pgxpool.Pool) ([]db.Unit, error) {
 	return out, nil
 }
 
-// PullSamsaraLiveLevels updates units.fuel_level_percent and
-// units.def_level_percent from Samsara's live vehicle stats (one combined
-// request). Meant to run frequently (e.g. every 15 min via cron).
+// PullSamsaraLiveLevels updates units.fuel_level_percent,
+// units.def_level_percent, and units.latitude/longitude from Samsara's live
+// vehicle stats (one combined request). Meant to run frequently (e.g. every
+// 15 min via cron) — the position feed is what keeps the Map Link fresh.
 func PullSamsaraLiveLevels(ctx context.Context, pool *pgxpool.Pool, client *samsara.Client) (updated int, err error) {
 	units, err := matchedUnits(ctx, pool)
 	if err != nil {
@@ -61,6 +62,8 @@ func PullSamsaraLiveLevels(ctx context.Context, pool *pgxpool.Pool, client *sams
 			UnitNumber:       u.UnitNumber,
 			FuelLevelPercent: lv.FuelPercent,
 			DEFLevelPercent:  lv.DEFPercent,
+			Latitude:         lv.Latitude,
+			Longitude:        lv.Longitude,
 		}); err != nil {
 			return updated, fmt.Errorf("upsert unit %s: %w", u.UnitNumber, err)
 		}

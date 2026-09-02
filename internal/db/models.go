@@ -17,6 +17,8 @@ type Unit struct {
 	FuelLevelPercent *float64
 	MPG              *float64
 	DEFLevelPercent  *float64
+	Latitude         *float64
+	Longitude        *float64
 	MondayItemID     *string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time

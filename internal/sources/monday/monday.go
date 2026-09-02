@@ -89,9 +89,82 @@ func (c *Client) ListItems(ctx context.Context, boardID string) ([]Item, error) 
 	return out, nil
 }
 
+// GetTextColumns reads the given text-type columns for every item on a
+// board, paginated. Returns item id -> (column id -> text). A column with
+// no value for an item is simply absent from that item's inner map. This is
+// a read-back of our OWN write target — used narrowly (e.g. checking
+// whether a dispatcher has entered a fuel stop before deciding whether to
+// compute a Map Link), not as a general data source.
+func (c *Client) GetTextColumns(ctx context.Context, boardID string, columnIDs []string) (map[string]map[string]string, error) {
+	const query = `
+		query ($boardId: ID!, $columnIds: [String!], $cursor: String) {
+			boards(ids: [$boardId]) {
+				items_page(limit: 100, cursor: $cursor) {
+					cursor
+					items {
+						id
+						column_values(ids: $columnIds) { id text }
+					}
+				}
+			}
+		}
+	`
+
+	out := map[string]map[string]string{}
+	var cursor string
+
+	for {
+		vars := map[string]any{"boardId": boardID, "columnIds": columnIDs}
+		if cursor != "" {
+			vars["cursor"] = cursor
+		}
+
+		var resp struct {
+			Boards []struct {
+				ItemsPage struct {
+					Cursor string `json:"cursor"`
+					Items  []struct {
+						ID           string `json:"id"`
+						ColumnValues []struct {
+							ID   string `json:"id"`
+							Text string `json:"text"`
+						} `json:"column_values"`
+					} `json:"items"`
+				} `json:"items_page"`
+			} `json:"boards"`
+		}
+		if err := c.execute(ctx, query, vars, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Boards) == 0 {
+			break
+		}
+
+		page := resp.Boards[0].ItemsPage
+		for _, it := range page.Items {
+			cols := map[string]string{}
+			for _, cv := range it.ColumnValues {
+				if cv.Text != "" {
+					cols[cv.ID] = cv.Text
+				}
+			}
+			if len(cols) > 0 {
+				out[it.ID] = cols
+			}
+		}
+		if page.Cursor == "" {
+			break
+		}
+		cursor = page.Cursor
+	}
+
+	return out, nil
+}
+
 // ColumnValues is a column_id -> value map, matching monday's per-column-type
 // value shapes (plain string for text/numbers, {"item_ids": [...]} for
-// board_relation, {"label": ...} for status, etc.).
+// board_relation, {"label": ...} for status, {"url": ..., "text": ...} for
+// link — confirmed live, not assumed).
 type ColumnValues map[string]any
 
 type CreateOp struct {

@@ -29,8 +29,10 @@ type Row struct {
 	DriverLastName  *string
 	DriverPhone     *string
 
-	LoadNumber  *string
-	Destination *string // "city, state zip", not a full street address
+	LoadNumber *string
+	// Route is the load's full waypoint sequence as "city, state => city,
+	// state => ...", in stop order — not just the current/next waypoint.
+	Route *string
 }
 
 func FetchCompanyName(ctx context.Context, pool *pgxpool.Pool, companyID int64) (string, error) {
@@ -43,26 +45,36 @@ func FetchCompanyName(ctx context.Context, pool *pgxpool.Pool, companyID int64) 
 // companyID that currently has an actively-employed driver assigned
 // (trucks with no such driver are excluded entirely — not returned as an
 // empty-driver row), with that driver's current load number and the load's
-// current waypoint location as "city, state zip" (Load.current_waypoint_id
-// is the dispatch system's own "where this load is headed right now"
-// pointer).
+// full waypoint sequence (every non-deleted waypoint, in stop order, as
+// "city, state" chained by " => ") — not just the current/next stop.
 func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int64) ([]Row, error) {
 	rows, err := pool.Query(ctx, `
+		WITH load_route AS (
+			SELECT
+				w.load_id,
+				string_agg(
+					NULLIF(concat_ws(', ', p.city, p.state), ''),
+					' => ' ORDER BY w.order
+				) AS route
+			FROM waypoints w
+			JOIN places p ON p.id = w.place_id AND p.is_deleted = false
+			WHERE w.is_deleted = false
+			GROUP BY w.load_id
+		)
 		SELECT
 			t.truck_number,
 			u.first_name,
 			u.last_name,
 			u.phone,
 			l.load_number,
-			NULLIF(concat_ws(' ', concat_ws(', ', p.city, p.state), p.postal_code), '') AS destination
+			lr.route
 		FROM trucks t
 		JOIN drivers d ON d.current_truck_id = t.id
 			AND d.is_deleted = false
 			AND d.employment_status = 'active'
 		JOIN users u ON u.id = d.user_id AND u.is_deleted = false
 		LEFT JOIN loads l ON l.id = d.current_load_id AND l.is_deleted = false
-		LEFT JOIN waypoints w ON w.id = l.current_waypoint_id AND w.is_deleted = false
-		LEFT JOIN places p ON p.id = w.place_id AND p.is_deleted = false
+		LEFT JOIN load_route lr ON lr.load_id = l.id
 		WHERE t.is_deleted = false AND t.company_id = $1
 		ORDER BY t.truck_number
 	`, companyID)
@@ -74,7 +86,7 @@ func FetchUnitsAndDrivers(ctx context.Context, pool *pgxpool.Pool, companyID int
 	var out []Row
 	for rows.Next() {
 		var r Row
-		if err := rows.Scan(&r.UnitNumber, &r.DriverFirstName, &r.DriverLastName, &r.DriverPhone, &r.LoadNumber, &r.Destination); err != nil {
+		if err := rows.Scan(&r.UnitNumber, &r.DriverFirstName, &r.DriverLastName, &r.DriverPhone, &r.LoadNumber, &r.Route); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
