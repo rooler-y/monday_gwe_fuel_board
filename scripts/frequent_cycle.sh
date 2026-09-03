@@ -44,3 +44,5 @@ run collect-db
 run collect-samsara-match
 run collect-samsara-stats
 run publish-monday
+run collect-secondary-board
+run publish-secondary-board

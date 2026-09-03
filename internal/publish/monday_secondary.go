@@ -11,12 +11,16 @@ import (
 	"fuelboard/internal/sources/monday"
 )
 
-// colSecondaryFuel is the "Fuel" text column on Fuel Board 2.0 — the only
-// field we write there. Everything else on that board (Drivers, Phone,
-// Status, Load ID, Origin - Destination, Miles, Gallons, Next Station,
-// Note, Card#, Card PIN, Max Miles, Fuel Tank Capacity, Fuel Efficiency
-// M/G) is entered/owned by the other side.
-const colSecondaryFuel = "text_mm6v4esn"
+// colSecondaryFuel is the "Fuel" column on Fuel Board 2.0 — the only field
+// we write there. Everything else on that board (Drivers, Phone, Status,
+// Load ID, Origin - Destination, Miles, Gallons, Next Station, Note,
+// Card#, Card PIN, Max Miles, Fuel Tank Capacity, Fuel Efficiency M/G) is
+// entered/owned by the other side.
+//
+// This is numeric_mm6v3cdm, not the original text_mm6v4esn: the column was
+// changed from text to numbers type on the board, which — confirmed live —
+// deletes and recreates it under a new id rather than converting in place.
+const colSecondaryFuel = "numeric_mm6v3cdm"
 
 // PublishSecondaryBoard writes the live fuel level we've collected back to
 // Fuel Board 2.0. Update-only: items there are created and deleted entirely
