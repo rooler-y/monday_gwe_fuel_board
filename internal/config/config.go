@@ -18,6 +18,10 @@ type Config struct {
 
 	MondayAPIToken string
 	MondayBoardID  string
+	// MondaySecondaryBoardID is "Fuel Board 2.0" — a second board where items
+	// (trucks) are created and deleted by the other side, not by us. We only
+	// ever update existing items on it, never create/delete.
+	MondaySecondaryBoardID string
 
 	SamsaraAPIToken string
 
@@ -34,6 +38,7 @@ func Load() (*Config, error) {
 		TargetDBCompanyID:        os.Getenv("TARGET_DB_COMPANY_ID"),
 		MondayAPIToken:           os.Getenv("MONDAY_API_TOKEN"),
 		MondayBoardID:            os.Getenv("MONDAY_BOARD_ID"),
+		MondaySecondaryBoardID:   os.Getenv("MONDAY_SECONDARY_BOARD_ID"),
 		SamsaraAPIToken:          os.Getenv("SAMSARA_API_TOKEN"),
 		GoogleServiceAccountJSON: os.Getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
 		GoogleSheetID:            os.Getenv("GOOGLE_SHEET_ID"),

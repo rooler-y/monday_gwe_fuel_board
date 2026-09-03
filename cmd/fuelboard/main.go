@@ -20,7 +20,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: fuelboard <command>\n\ncommands:\n  migrate                     apply pending SQL migrations\n  collect-db                  pull units/drivers from the target dispatch DB\n  collect-samsara-match       match units to Samsara vehicles by unit number\n  collect-samsara-stats       pull live fuel level % (run frequently)\n  collect-samsara-fuel-report pull daily settled MPG efficiency report\n  publish-monday              create/update Fuel Board items from our registry")
+		fmt.Fprintln(os.Stderr, "usage: fuelboard <command>\n\ncommands:\n  migrate                     apply pending SQL migrations\n  collect-db                  pull units/drivers from the target dispatch DB\n  collect-samsara-match       match units to Samsara vehicles by unit number\n  collect-samsara-stats       pull live fuel level % (run frequently)\n  collect-samsara-fuel-report pull daily settled MPG efficiency report\n  publish-monday              create/update Fuel Board items from our registry\n  collect-secondary-board     read Samsara IDs + pull fuel level for Fuel Board 2.0 (their items)\n  publish-secondary-board     write fuel level back to Fuel Board 2.0 (update-only)")
 		os.Exit(1)
 	}
 
@@ -67,6 +67,16 @@ func main() {
 	case "publish-monday":
 		if err := runPublishMonday(ctx, cfg, pool); err != nil {
 			fmt.Fprintln(os.Stderr, "publish-monday error:", err)
+			os.Exit(1)
+		}
+	case "collect-secondary-board":
+		if err := runCollectSecondaryBoard(ctx, cfg, pool); err != nil {
+			fmt.Fprintln(os.Stderr, "collect-secondary-board error:", err)
+			os.Exit(1)
+		}
+	case "publish-secondary-board":
+		if err := runPublishSecondaryBoard(ctx, cfg, pool); err != nil {
+			fmt.Fprintln(os.Stderr, "publish-secondary-board error:", err)
 			os.Exit(1)
 		}
 	default:
@@ -150,6 +160,38 @@ func runPublishMonday(ctx context.Context, cfg *config.Config, ownPool *pgxpool.
 		return err
 	}
 	fmt.Printf("publish-monday done: %d created, %d updated\n", created, updated)
+	return nil
+}
+
+func runCollectSecondaryBoard(ctx context.Context, cfg *config.Config, ownPool *pgxpool.Pool) error {
+	if cfg.SamsaraAPIToken == "" {
+		return fmt.Errorf("SAMSARA_API_TOKEN must be set")
+	}
+	if cfg.MondayAPIToken == "" || cfg.MondaySecondaryBoardID == "" {
+		return fmt.Errorf("MONDAY_API_TOKEN and MONDAY_SECONDARY_BOARD_ID must be set")
+	}
+	mondayClient := monday.NewClient(cfg.MondayAPIToken)
+	samsaraClient := samsara.NewClient(cfg.SamsaraAPIToken)
+
+	updated, err := collect.RunSecondaryBoard(ctx, ownPool, mondayClient, samsaraClient, cfg.MondaySecondaryBoardID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("collect-secondary-board done: %d units updated\n", updated)
+	return nil
+}
+
+func runPublishSecondaryBoard(ctx context.Context, cfg *config.Config, ownPool *pgxpool.Pool) error {
+	if cfg.MondayAPIToken == "" || cfg.MondaySecondaryBoardID == "" {
+		return fmt.Errorf("MONDAY_API_TOKEN and MONDAY_SECONDARY_BOARD_ID must be set")
+	}
+	client := monday.NewClient(cfg.MondayAPIToken)
+
+	updated, err := publish.PublishSecondaryBoard(ctx, ownPool, client, cfg.MondaySecondaryBoardID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("publish-secondary-board done: %d updated\n", updated)
 	return nil
 }
 
