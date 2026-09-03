@@ -19,8 +19,10 @@ const secondarySamsaraIDColumn = "text_mm6vdkkz"
 
 // RunSecondaryBoard syncs "Fuel Board 2.0" (a board whose items are created
 // and deleted entirely by the other side): it reads every item's current
-// Samsara ID entry, prunes rows for items that got deleted, then pulls live
-// fuel level for every distinct vehicle ID found and stores it locally for
+// Samsara ID entry, matches the item's name against our own unit registry
+// (unit number) so the publisher can later pull Driver/Phone/Load ID for
+// it, prunes rows for items that got deleted, then pulls live fuel level
+// for every distinct vehicle ID found and stores it locally for
 // PublishSecondaryBoard to write back.
 func RunSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, mondayClient *monday.Client, samsaraClient *samsara.Client, boardID string) (updated int, err error) {
 	items, err := mondayClient.ListItems(ctx, boardID)
@@ -31,6 +33,11 @@ func RunSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, mondayClient *mo
 	cols, err := mondayClient.GetTextColumns(ctx, boardID, []string{secondarySamsaraIDColumn})
 	if err != nil {
 		return 0, fmt.Errorf("get secondary board samsara id column: %w", err)
+	}
+
+	localUnits, err := db.ListUnits(ctx, pool)
+	if err != nil {
+		return 0, fmt.Errorf("list units: %w", err)
 	}
 
 	var errs []error
@@ -44,8 +51,14 @@ func RunSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, mondayClient *mo
 		if vehicleID == "" {
 			continue
 		}
-		if err := db.UpsertSecondaryBoardUnitSamsaraID(ctx, pool, it.ID, vehicleID); err != nil {
-			errs = append(errs, fmt.Errorf("item %s: save samsara id: %w", it.ID, err))
+
+		var unitNumber *string
+		if match := matchUnitNumberByName(it.Name, localUnits); match != "" {
+			unitNumber = &match
+		}
+
+		if err := db.UpsertSecondaryBoardUnit(ctx, pool, it.ID, vehicleID, unitNumber); err != nil {
+			errs = append(errs, fmt.Errorf("item %s: save samsara id/unit number: %w", it.ID, err))
 			continue
 		}
 		vehicleIDByItem[it.ID] = vehicleID
@@ -83,4 +96,22 @@ func RunSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, mondayClient *mo
 	}
 
 	return updated, errors.Join(errs...)
+}
+
+// matchUnitNumberByName finds the unit whose unit number matches itemName,
+// using the same case-insensitive two-way substring rule as the Samsara
+// vehicle matcher and the IN/OUT board matcher — the item name isn't always
+// an exact equal of the unit number.
+func matchUnitNumberByName(itemName string, units []db.Unit) string {
+	name := strings.ToLower(strings.TrimSpace(itemName))
+	if name == "" {
+		return ""
+	}
+	for _, u := range units {
+		num := strings.ToLower(u.UnitNumber)
+		if num != "" && (strings.Contains(name, num) || strings.Contains(num, name)) {
+			return u.UnitNumber
+		}
+	}
+	return ""
 }

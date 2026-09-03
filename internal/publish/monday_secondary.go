@@ -4,27 +4,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fuelboard/internal/db"
 	"fuelboard/internal/sources/monday"
 )
 
-// colSecondaryFuel is the "Fuel" column on Fuel Board 2.0 — the only field
-// we write there. Everything else on that board (Drivers, Phone, Status,
-// Load ID, Origin - Destination, Miles, Gallons, Next Station, Note,
-// Card#, Card PIN, Max Miles, Fuel Tank Capacity, Fuel Efficiency M/G) is
-// entered/owned by the other side.
-//
-// This is numeric_mm6v3cdm, not the original text_mm6v4esn: the column was
-// changed from text to numbers type on the board, which — confirmed live —
-// deletes and recreates it under a new id rather than converting in place.
-const colSecondaryFuel = "numeric_mm6v3cdm"
+// Fuel Board 2.0 column IDs actually written by this publisher. Everything
+// else on that board (Status, Origin - Destination, Miles, Gallons, Next
+// Station, Note, Card#, Card PIN, Max Miles, Fuel Tank Capacity, Fuel
+// Efficiency M/G) is entered/owned by the other side.
+const (
+	// This is numeric_mm6v3cdm, not the original text_mm6v4esn: the column
+	// was changed from text to numbers type on the board, which — confirmed
+	// live — deletes and recreates it under a new id rather than converting
+	// in place.
+	colSecondaryFuel   = "numeric_mm6v3cdm"
+	colSecondaryDriver = "text_mm6vm6py"
+	colSecondaryLoadID = "text_mm6vf8sv"
+	// colSecondaryPhone is a "phone" type column, not "text" like the main
+	// board's Phone column — confirmed live it needs
+	// {"phone": "<digits only, no formatting>", "countryShortName": "US"},
+	// and rejects a plain string or a number with dashes/spaces.
+	colSecondaryPhone = "phone_mm6v6kq1"
+)
 
-// PublishSecondaryBoard writes the live fuel level we've collected back to
-// Fuel Board 2.0. Update-only: items there are created and deleted entirely
-// by the other side, so we never create or delete anything on this board.
+// PublishSecondaryBoard writes the live fuel level, and — for items whose
+// name matched one of our own units (see RunSecondaryBoard) — that unit's
+// current Driver/Phone/Load ID, back to Fuel Board 2.0. Update-only: items
+// there are created and deleted entirely by the other side, so we never
+// create or delete anything on this board.
 func PublishSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, client *monday.Client, boardID string) (updated int, err error) {
 	units, err := db.ListSecondaryBoardUnits(ctx, pool)
 	if err != nil {
@@ -33,15 +45,49 @@ func PublishSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, client *mond
 
 	var updates []monday.UpdateOp
 	for _, u := range units {
-		if u.FuelLevelPercent == nil {
+		cv := monday.ColumnValues{}
+
+		if u.FuelLevelPercent != nil {
+			cv[colSecondaryFuel] = formatNumber(*u.FuelLevelPercent)
+		}
+
+		if u.UnitNumber != nil {
+			localUnit, err := db.GetUnitByUnitNumber(ctx, pool, *u.UnitNumber)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				// matched name no longer resolves to a unit — nothing to add
+			case err != nil:
+				return 0, fmt.Errorf("unit %s: %w", *u.UnitNumber, err)
+			default:
+				driver, err := db.GetDriverByUnitID(ctx, pool, localUnit.ID)
+				switch {
+				case errors.Is(err, pgx.ErrNoRows):
+					// no driver currently on this unit — leave Driver/Phone/Load ID untouched
+				case err != nil:
+					return 0, fmt.Errorf("driver for unit %s: %w", *u.UnitNumber, err)
+				default:
+					if driver.DriverName != "" {
+						cv[colSecondaryDriver] = driver.DriverName
+					}
+					if driver.PhoneNumber != nil {
+						if digits := digitsOnly(*driver.PhoneNumber); digits != "" {
+							cv[colSecondaryPhone] = map[string]any{"phone": digits, "countryShortName": "US"}
+						}
+					}
+					if driver.LoadNumber != nil {
+						cv[colSecondaryLoadID] = *driver.LoadNumber
+					}
+				}
+			}
+		}
+
+		if len(cv) == 0 {
 			continue
 		}
 		updates = append(updates, monday.UpdateOp{
-			BoardID: boardID,
-			ItemID:  u.MondayItemID,
-			ColumnValues: monday.ColumnValues{
-				colSecondaryFuel: formatNumber(*u.FuelLevelPercent),
-			},
+			BoardID:      boardID,
+			ItemID:       u.MondayItemID,
+			ColumnValues: cv,
 		})
 	}
 	if len(updates) == 0 {
@@ -85,4 +131,18 @@ func healStaleSecondaryUnits(ctx context.Context, pool *pgxpool.Pool, client *mo
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// digitsOnly strips everything but digits — Fuel Board 2.0's Phone column
+// (a "phone" type column, unlike the main board's plain-text one) rejects
+// any formatting characters (confirmed live: dashes alone trigger a
+// ColumnValueException).
+func digitsOnly(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
