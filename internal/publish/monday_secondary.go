@@ -14,9 +14,9 @@ import (
 )
 
 // Fuel Board 2.0 column IDs actually written by this publisher. Everything
-// else on that board (Status, Origin - Destination, Miles, Gallons, Next
-// Station, Note, Card#, Card PIN, Max Miles, Fuel Tank Capacity, Fuel
-// Efficiency M/G) is entered/owned by the other side.
+// else on that board (Status, Miles, Gallons, Next Station, Note, Card#,
+// Card PIN, Max Miles, Fuel Tank Capacity, Fuel Efficiency M/G) is
+// entered/owned by the other side.
 const (
 	// This is numeric_mm6v3cdm, not the original text_mm6v4esn: the column
 	// was changed from text to numbers type on the board, which — confirmed
@@ -25,6 +25,11 @@ const (
 	colSecondaryFuel   = "numeric_mm6v3cdm"
 	colSecondaryDriver = "text_mm6vm6py"
 	colSecondaryLoadID = "text_mm6vf8sv"
+	// colSecondaryOriginDestination gets whatever's in the matched unit's
+	// driver.Destination as-is — a full route chain for target-DB-sourced
+	// companies, or just whatever free text a Sheets-sourced company's
+	// Delivery column holds (no attempt to reshape it into a route chain).
+	colSecondaryOriginDestination = "text_mm6vqys5"
 	// colSecondaryPhone is a "phone" type column, not "text" like the main
 	// board's Phone column — confirmed live it needs
 	// {"phone": "<digits only, no formatting>", "countryShortName": "US"},
@@ -76,6 +81,9 @@ func PublishSecondaryBoard(ctx context.Context, pool *pgxpool.Pool, client *mond
 					}
 					if driver.LoadNumber != nil {
 						cv[colSecondaryLoadID] = *driver.LoadNumber
+					}
+					if driver.Destination != nil {
+						cv[colSecondaryOriginDestination] = *driver.Destination
 					}
 				}
 			}
