@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -11,10 +12,12 @@ type Config struct {
 	DatabaseURL string
 
 	// TargetDBURL is the external dispatch system's Postgres DB we read from
-	// (read-only). TargetDBCompanyID scopes every query to one company/tenant
-	// within that DB.
-	TargetDBURL       string
-	TargetDBCompanyID string
+	// (read-only). TargetDBCompanyIDs scopes every query to one or more
+	// company/tenant rows within that DB, each synced independently — read
+	// from TARGET_DB_COMPANY_ID_1, TARGET_DB_COMPANY_ID_2, etc. (numbered
+	// from 1, stopping at the first gap).
+	TargetDBURL        string
+	TargetDBCompanyIDs []int64
 
 	MondayAPIToken string
 	MondayBoardID  string
@@ -32,10 +35,23 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	var targetDBCompanyIDs []int64
+	for i := 1; ; i++ {
+		v := os.Getenv(fmt.Sprintf("TARGET_DB_COMPANY_ID_%d", i))
+		if v == "" {
+			break
+		}
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid TARGET_DB_COMPANY_ID_%d %q: %w", i, v, err)
+		}
+		targetDBCompanyIDs = append(targetDBCompanyIDs, id)
+	}
+
 	cfg := &Config{
 		DatabaseURL:              os.Getenv("DATABASE_URL"),
 		TargetDBURL:              os.Getenv("TARGET_DB_URL"),
-		TargetDBCompanyID:        os.Getenv("TARGET_DB_COMPANY_ID"),
+		TargetDBCompanyIDs:       targetDBCompanyIDs,
 		MondayAPIToken:           os.Getenv("MONDAY_API_TOKEN"),
 		MondayBoardID:            os.Getenv("MONDAY_BOARD_ID"),
 		MondaySecondaryBoardID:   os.Getenv("MONDAY_SECONDARY_BOARD_ID"),

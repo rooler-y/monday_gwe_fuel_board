@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -86,12 +86,8 @@ func main() {
 }
 
 func runCollectDB(ctx context.Context, cfg *config.Config, ownPool *pgxpool.Pool) error {
-	if cfg.TargetDBURL == "" || cfg.TargetDBCompanyID == "" {
-		return fmt.Errorf("TARGET_DB_URL and TARGET_DB_COMPANY_ID must be set")
-	}
-	companyID, err := strconv.ParseInt(cfg.TargetDBCompanyID, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid TARGET_DB_COMPANY_ID %q: %w", cfg.TargetDBCompanyID, err)
+	if cfg.TargetDBURL == "" || len(cfg.TargetDBCompanyIDs) == 0 {
+		return fmt.Errorf("TARGET_DB_URL and at least TARGET_DB_COMPANY_ID_1 must be set")
 	}
 
 	targetPool, err := db.Connect(ctx, cfg.TargetDBURL)
@@ -100,7 +96,15 @@ func runCollectDB(ctx context.Context, cfg *config.Config, ownPool *pgxpool.Pool
 	}
 	defer targetPool.Close()
 
-	if err := collect.RunTargetDB(ctx, ownPool, targetPool, companyID); err != nil {
+	// Each company/tenant is synced independently so one's failure doesn't
+	// block another's.
+	var errs []error
+	for _, companyID := range cfg.TargetDBCompanyIDs {
+		if err := collect.RunTargetDB(ctx, ownPool, targetPool, companyID); err != nil {
+			errs = append(errs, fmt.Errorf("company %d: %w", companyID, err))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
 		return err
 	}
 	fmt.Println("collect-db done")
